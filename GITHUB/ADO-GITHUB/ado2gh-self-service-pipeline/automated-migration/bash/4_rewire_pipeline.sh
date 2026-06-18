@@ -69,13 +69,11 @@ SUCCESS_COUNT=0
 FAILURE_COUNT=0
 ALREADY_MIGRATED_COUNT=0
 SKIPPED_COUNT=0
-SKIPPED_REWIRING_COUNT=0
-declare -a RESULTS=()
-declare -a FAILED_DETAILS=()
-declare -a ALREADY_MIGRATED_DETAILS=()
-declare -a SKIPPED_DETAILS=()
-declare -a SKIPPED_REWIRING=()
-declare -A MIGRATED_REPOS=()  # Track successfully migrated repos
+declare -a RESULTS
+declare -a FAILED_DETAILS
+declare -a ALREADY_MIGRATED_DETAILS
+declare -a SKIPPED_DETAILS
+declare -A MIGRATED_REPOS  # Track successfully migrated repos
 
 # --- Helper Functions ---
 
@@ -357,23 +355,6 @@ while IFS= read -r line; do
         
         # Check if already on GitHub (detect from output/warnings)
         OUTPUT_CONTENT=$(cat "$OUTPUT_FILE" "$ERROR_FILE")
-
-         # CATCH HIDDEN ERRORS (400, 403, 500, etc.)
-        # If the output contains "Response status code does not indicate success"
-        if echo "$OUTPUT_CONTENT" | grep -qi "does not indicate success"; then
-            SKIPPED_REWIRING_COUNT=$((SKIPPED_REWIRING_COUNT + 1))
-            ERROR_EXTRACT=$(echo "$OUTPUT_CONTENT" | grep -oE "[0-9]{3} \(.*\)")
-            echo -e "${RED}      ⚠️ WARNING: API FAILED - $ERROR_EXTRACT ${NC}"
-            echo "$OUTPUT_CONTENT"
-            # This adds a record to the "Issues" summary at the top of the ADO page
-            echo "##vso[task.logissue type=warning]Pipeline $ADO_PIPELINE failed with $ERROR_EXTRACT"
-
-            
-            
-            RESULTS+=("⚠️ WARNING | $ADO_PROJECT/$ADO_PIPELINE ($ERROR_EXTRACT)")
-            SKIPPED_REWIRING+=("⚠️ $ADO_PROJECT/$ADO_PIPELINE: $ERROR_EXTRACT") 
-            continue 
-        fi
         
         # Display and save the verbose output to console and log
         if [ -n "$OUTPUT_CONTENT" ]; then
@@ -442,7 +423,6 @@ echo -e "Total Pipelines: $PIPELINE_COUNT"
 echo -e "${GREEN}Successful: $SUCCESS_COUNT${NC}"
 echo -e "${YELLOW}Already on GitHub: $ALREADY_MIGRATED_COUNT${NC}"
 echo -e "${YELLOW}Skipped (repo not migrated): $SKIPPED_COUNT${NC}"
-echo -e "${YELLOW}Skipped (rewiring incomplete): $SKIPPED_REWIRING_COUNT${NC}"
 echo -e "${RED}Failed: $FAILURE_COUNT${NC}"
 
 echo -e "\n${CYAN}📋 Detailed Results:${NC}"
@@ -466,14 +446,6 @@ if [ -n "${SKIPPED_DETAILS+x}" ] && [ ${#SKIPPED_DETAILS[@]} -gt 0 ]; then
     done
 fi
 
-# Show details for skipped rewiring
-if [ -n "${SKIPPED_REWIRING+x}" ] && [ ${#SKIPPED_REWIRING[@]} -gt 0 ]; then
-    echo -e "\n${YELLOW}⏭️  Skipped (rewiring incomplete):${NC}"
-    for detail in "${SKIPPED_REWIRING[@]}"; do
-        echo -e "${GRAY}   • $detail${NC}"
-    done
-fi
-
 # Show details for failed pipelines
 if [ -n "${FAILED_DETAILS+x}" ] && [ ${#FAILED_DETAILS[@]} -gt 0 ]; then
     echo -e "\n${RED}❌ Failed Pipelines:${NC}"
@@ -493,7 +465,6 @@ Total Pipelines: $PIPELINE_COUNT
 Successful: $SUCCESS_COUNT
 Already on GitHub: $ALREADY_MIGRATED_COUNT
 Skipped (repo not migrated): $SKIPPED_COUNT
-skipped (rewiring incomplete): $SKIPPED_REWIRING_COUNT
 Failed: $FAILURE_COUNT
 
 Detailed Results:
@@ -504,10 +475,6 @@ $(if [ "${#ALREADY_MIGRATED_DETAILS[@]}" -gt 0 ] 2>/dev/null; then printf '%s\n'
 
 Skipped Pipeline Details (Repository not migrated):
 $(if [ "${#SKIPPED_DETAILS[@]}" -gt 0 ] 2>/dev/null; then printf '%s\n' "${SKIPPED_DETAILS[@]}"; else echo "None"; fi)
-
-Skipped Pipeline Details (Rewiring incomplete):
-$(if [ "${#SKIPPED_REWIRING[@]}" -gt 0 ] 2>/dev/null; then printf '%s\n' "${SKIPPED_REWIRING[@]}"; else echo "None"; fi)
-
 
 Failed Pipeline Details:
 $(if [ "${#FAILED_DETAILS[@]}" -gt 0 ] 2>/dev/null; then printf '%s\n' "${FAILED_DETAILS[@]}"; else echo "None"; fi)
@@ -536,27 +503,17 @@ ACTUAL_FAILURES=$FAILURE_COUNT  # Only count real errors, not "already migrated"
 ACTUAL_SUCCESSES=$((SUCCESS_COUNT + ALREADY_MIGRATED_COUNT))  # Both are successful outcomes
 
 # Check if ALL pipelines were skipped (no actual work done)
-if [ $ACTUAL_SUCCESSES -eq 0 ] && [ $ACTUAL_FAILURES -eq 0 ] && [ $SKIPPED_COUNT -gt 0 ] && [ $SKIPPED_REWIRING_COUNT -gt 0 ]; then
+if [ $ACTUAL_SUCCESSES -eq 0 ] && [ $ACTUAL_FAILURES -eq 0 ] && [ $SKIPPED_COUNT -gt 0 ]; then
     # All pipelines skipped - show warning
     echo -e "\n${YELLOW}⚠️  All pipelines skipped - no repositories were migrated${NC}"
     echo -e "${YELLOW}   ⏭️  Skipped: $SKIPPED_COUNT${NC}"
-    echo -e "${YELLOW}   ⏭️  Skipped: $SKIPPED_REWIRING_COUNT${NC}"
     echo "##[warning]⚠️ All $SKIPPED_COUNT pipeline(s) skipped because their repositories were not successfully migrated"
-    echo "##[warning]⚠️ All $SKIPPED_REWIRING_COUNT pipeline(s) skipped because rewiring is incomplete"
     echo "##vso[task.logissue type=warning]All pipelines skipped - no repositories migrated"
     
     # Show skipped pipeline details
     if [ ${#SKIPPED_DETAILS[@]} -gt 0 ]; then
         echo -e "\n${YELLOW}Skipped Pipeline Details:${NC}"
         for detail in "${SKIPPED_DETAILS[@]}"; do
-            echo "##[warning]  Skipped: $detail"
-        done
-    fi
-
-    # Show skipped rewiirng details
-    if [ ${#SKIPPED_REWIRING[@]} -gt 0 ]; then
-        echo -e "\n${YELLOW}Skipped Pipeline Details:${NC}"
-        for detail in "${SKIPPED_REWIRING[@]}"; do
             echo "##[warning]  Skipped: $detail"
         done
     fi
@@ -585,30 +542,9 @@ elif [ $ACTUAL_FAILURES -eq 0 ]; then
                 echo "##[warning]  Skipped: $detail"
             done
         fi
+        
         echo "##vso[task.complete result=SucceededWithIssues]Rewiring completed with $SKIPPED_COUNT skipped pipeline(s)"
         exit 0
-    
-    elif [ $SKIPPED_REWIRING_COUNT -gt 0 ]; then
-        # Some succeeded, some skipped
-        echo -e "\n${GREEN}✅ Pipeline rewiring completed successfully${NC}"
-        echo -e "${GREEN}   ✅ Successful: $SUCCESS_COUNT${NC}"
-        if [ $ALREADY_MIGRATED_COUNT -gt 0 ]; then
-            echo -e "${YELLOW}   ⚠️  Already on GitHub: $ALREADY_MIGRATED_COUNT${NC}"
-        fi
-        echo -e "${YELLOW}   ⏭️  Skipped: $SKIPPED_REWIRING_COUNT${NC}"
-        echo "##[warning]$SKIPPED_REWIRING_COUNT pipeline(s) skipped because rewiring is incomplete"
-
-        # Show skipped rewiring
-        if [ ${#SKIPPED_REWIRING[@]} -gt 0 ]; then
-            echo -e "\n${YELLOW}Skipped Pipeline Details (Rewiring incomplete):${NC}"
-            for detail in "${SKIPPED_REWIRING[@]}"; do
-                echo "##[warning]  Skipped: $detail"
-            done
-        fi
-        
-        echo "##vso[task.complete result=SucceededWithIssues]Rewiring completed with $SKIPPED_REWIRING_COUNT skipped pipeline(s)"
-        exit 0
-    
     elif [ $ALREADY_MIGRATED_COUNT -gt 0 ]; then
         echo -e "\n${GREEN}✅ Pipeline rewiring completed successfully${NC}"
         echo "##[warning]$ALREADY_MIGRATED_COUNT pipeline(s) already on GitHub - no rewiring needed"
@@ -628,14 +564,11 @@ else
     if [ $SKIPPED_COUNT -gt 0 ]; then
         echo -e "${YELLOW}   ⏭️  Skipped: $SKIPPED_COUNT${NC}"
     fi
-    if [ $SKIPPED_REWIRING_COUNT -gt 0 ]; then
-        echo -e "${YELLOW}   ⏭️  Skipped: $SKIPPED_COUNT${NC}"
-    fi
     echo -e "${RED}   ❌ Failed: $FAILURE_COUNT${NC}"
     
     # Output warnings for partial success
-    echo "##[warning]⚠️ Rewiring completed with issues: $ACTUAL_SUCCESSES succeeded, $SKIPPED_COUNT skipped,$SKIPPED_REWIRING_COUNT skippedRewiring,$FAILURE_COUNT failed"
-    echo "##vso[task.logissue type=warning]Partial success: $ACTUAL_SUCCESSES succeeded, $SKIPPED_COUNT skipped,$SKIPPED_REWIRING_COUNT skippedRewiring, $FAILURE_COUNT failed"
+    echo "##[warning]⚠️ Rewiring completed with issues: $ACTUAL_SUCCESSES succeeded, $SKIPPED_COUNT skipped, $FAILURE_COUNT failed"
+    echo "##vso[task.logissue type=warning]Partial success: $ACTUAL_SUCCESSES succeeded, $SKIPPED_COUNT skipped, $FAILURE_COUNT failed"
     
     # Show failed pipeline details as warnings
     if [ ${#FAILED_DETAILS[@]} -gt 0 ]; then
@@ -652,14 +585,6 @@ else
             echo "##[warning]  Skipped: $detail"
         done
     fi
-
-    # Show skipped pipeline rewiring details
-    if [ ${#SKIPPED_REWIRING[@]} -gt 0 ]; then
-        echo -e "\n${YELLOW}Skipped Pipeline Details (rewiring incomplete):${NC}"
-        for detail in "${SKIPPED_REWIRING[@]}"; do
-            echo "##[warning]  Skipped: $detail"
-        done
-    fi
     
     # Show already migrated details if any
     if [ ${#ALREADY_MIGRATED_DETAILS[@]} -gt 0 ]; then
@@ -673,4 +598,3 @@ else
     echo "##vso[task.complete result=SucceededWithIssues]Rewiring completed with partial success"
     exit 0
 fi
-
